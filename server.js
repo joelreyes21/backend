@@ -237,5 +237,5 @@ app.put('/api/cajas/:id/asignar', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`✅ API escuchando en puerto ${PORT}`);
+  console.log(`✅ API escuchando en puerto https://backend-7i6k.onrender.com ${puerto PORT}`);
 });
