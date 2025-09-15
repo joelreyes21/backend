@@ -4,22 +4,23 @@ import cors from 'cors';
 import mysql from 'mysql2/promise';
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000; // Render necesita PORT dinámico
 
 app.use(cors());
 app.use(express.json());
 
+// ✅ Conexión directa a tu base de datos de Hostinger
 const pool = mysql.createPool({
-  host: 'localhost',
-  user: 'root',      // ajusta si tienes otro usuario
-  password: '',      // ajusta si tienes contraseña
-  database: 'banco',
+  host: 'srv650.hstgr.io',           // Host de MySQL en Hostinger
+  user: 'u752608130_kriss',          // Usuario de tu captura
+  password: 'Bancosalado123',        // Contraseña que configuraste en Hostinger
+  database: 'u752608130_banco',      // Nombre de tu base de datos
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0
 });
 
-// Tipos y colores
+// ===== Tipos y colores =====
 const TIPOS = [
   { letra: 'A', nombre: 'Caja',                   color: '#e74c3c'  },
   { letra: 'B', nombre: 'Servicio al Cliente',    color: '#2ecc71'  },
@@ -35,7 +36,6 @@ function tipoAleatorio() {
   return TIPOS[Math.floor(Math.random() * TIPOS.length)];
 }
 
-// Normaliza servicio: acepta 'F' o 'Tercera Edad' y devuelve la letra
 function normalizarServicio(servicio) {
   if (servicio == null) return null;
   const s = String(servicio).trim();
@@ -47,9 +47,7 @@ function normalizarServicio(servicio) {
 }
 
 // ===== Tickets =====
-
-// Crear ticket aleatorio (como ya usabas)
-app.post('/api/ticket', async (req, res) => {
+app.post('/api/ticket', async (_req, res) => {
   const t = tipoAleatorio();
   const conn = await pool.getConnection();
   try {
@@ -71,7 +69,6 @@ app.post('/api/ticket', async (req, res) => {
   }
 });
 
-// Cola
 app.get('/api/cola', async (_req, res) => {
   const conn = await pool.getConnection();
   try {
@@ -86,7 +83,6 @@ app.get('/api/cola', async (_req, res) => {
   }
 });
 
-// Entregar siguiente ticket (solo devuelve el siguiente; NO cambia estado aquí)
 app.post('/api/entregar', async (_req, res) => {
   const conn = await pool.getConnection();
   try {
@@ -94,8 +90,6 @@ app.post('/api/entregar', async (_req, res) => {
       'SELECT * FROM tickets WHERE estado = "espera" ORDER BY id ASC LIMIT 1'
     );
     if (!siguiente) return res.status(404).json({ error: 'No hay clientes en espera' });
-
-    // Antes marcabas "atendido" aquí y rompía /asignar con cliente_id. Ya no.
     res.json({ entregado: siguiente });
   } catch (err) {
     res.status(500).json({ error: 'Error al entregar ticket' });
@@ -104,12 +98,10 @@ app.post('/api/entregar', async (_req, res) => {
   }
 });
 
-// Reiniciar todo
 app.post('/api/reiniciar', async (_req, res) => {
   const conn = await pool.getConnection();
   try {
     await conn.query('DELETE FROM tickets');
-    // NO ponemos updated_at = NULL
     await conn.query('UPDATE cajas SET ticket_id = NULL, estado = "desocupada", updated_at = NOW()');
     res.json({ ok: true });
   } catch (err) {
@@ -120,13 +112,9 @@ app.post('/api/reiniciar', async (_req, res) => {
 });
 
 // ===== Cajas =====
-
-// Crear caja (acepta letra o nombre)
 app.post('/api/cajas', async (req, res) => {
   const letra = normalizarServicio(req.body?.servicio);
-  if (!letra) {
-    return res.status(400).json({ error: 'Servicio inválido' });
-  }
+  if (!letra) return res.status(400).json({ error: 'Servicio inválido' });
   const conn = await pool.getConnection();
   try {
     const [[{ total }]] = await conn.query('SELECT COUNT(*) AS total FROM cajas');
@@ -144,14 +132,11 @@ app.post('/api/cajas', async (req, res) => {
   }
 });
 
-// Listar cajas (con datos del ticket si está ocupada)
 app.get('/api/cajas', async (_req, res) => {
   const conn = await pool.getConnection();
   try {
     const [rows] = await conn.query(
-      `SELECT c.*,
-              t.codigo AS cliente_codigo,
-              t.color  AS cliente_color
+      `SELECT c.*, t.codigo AS cliente_codigo, t.color AS cliente_color
          FROM cajas c
     LEFT JOIN tickets t ON c.ticket_id = t.id
      ORDER BY c.numero ASC`
@@ -164,7 +149,6 @@ app.get('/api/cajas', async (_req, res) => {
   }
 });
 
-// Actualizar estado de caja ('desocupada' | 'ocupada' | 'fuera_servicio')
 async function _actualizarEstadoCajaHandler(req, res) {
   const id = req.params.id;
   const { estado } = req.body || {};
@@ -179,12 +163,13 @@ async function _actualizarEstadoCajaHandler(req, res) {
   } catch (e) {
     console.error('estado caja:', e);
     res.status(500).json({ error: 'Error al actualizar estado' });
-  } finally { conn.release(); }
+  } finally {
+    conn.release();
+  }
 }
 app.patch('/api/cajas/:id/estado', _actualizarEstadoCajaHandler);
-app.put  ('/api/cajas/:id/estado', _actualizarEstadoCajaHandler);
+app.put('/api/cajas/:id/estado', _actualizarEstadoCajaHandler);
 
-// Liberar caja (respeta fuera_servicio y no pone updated_at = NULL)
 app.put('/api/cajas/:id', async (req, res) => {
   const cajaId = req.params.id;
   const conn = await pool.getConnection();
@@ -209,34 +194,26 @@ app.put('/api/cajas/:id', async (req, res) => {
   }
 });
 
-// Asignar cliente a caja
 app.put('/api/cajas/:id/asignar', async (req, res) => {
   const cajaId = req.params.id;
   const { cliente_id } = req.body || {};
-
   const conn = await pool.getConnection();
   try {
-    // trae caja con su servicio
     const [[caja]] = await conn.query('SELECT * FROM cajas WHERE id = ?', [cajaId]);
     if (!caja) return res.status(404).json({ error: 'Caja no existe' });
-
-    // no permitir asignar si está fuera de servicio
     if ((caja.estado || '').toLowerCase() === 'fuera_servicio') {
       return res.status(409).json({ error: 'Caja fuera de servicio' });
     }
-    // ⛔ NUEVO: no reasignar si ya está ocupada o tiene ticket
     if ((caja.estado || '').toLowerCase() === 'ocupada' || caja.ticket_id != null) {
       return res.status(409).json({ error: 'Caja ocupada' });
     }
 
     let ticket = null;
-
     if (cliente_id) {
       const [[t]] = await conn.query('SELECT * FROM tickets WHERE id = ?', [cliente_id]);
       if (!t || t.estado !== 'espera') return res.status(409).json({ error: 'Ticket no disponible' });
       ticket = t;
     } else {
-      // buscar siguiente ticket compatible por tipo/servicio
       const [[t]] = await conn.query(
         'SELECT * FROM tickets WHERE estado = "espera" AND tipo = ? ORDER BY id ASC LIMIT 1',
         [caja.servicio]
@@ -245,13 +222,11 @@ app.put('/api/cajas/:id/asignar', async (req, res) => {
       ticket = t;
     }
 
-    // asigna
     await conn.query(
       'UPDATE cajas SET ticket_id = ?, estado = "ocupada", updated_at = NOW() WHERE id = ?',
       [ticket.id, cajaId]
     );
     await conn.query('UPDATE tickets SET estado = "atendido" WHERE id = ?', [ticket.id]);
-
     res.json({ ok: true, cajaId, ticketId: ticket.id });
   } catch (err) {
     console.error('asignar:', err);
@@ -262,5 +237,5 @@ app.put('/api/cajas/:id/asignar', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`✅ API escuchando en http://localhost:${PORT}`);
+  console.log(`✅ API escuchando en puerto ${PORT}`);
 });
