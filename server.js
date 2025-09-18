@@ -2,6 +2,7 @@
 import express from 'express';
 import cors from 'cors';
 import mysql from 'mysql2/promise';
+import bcrypt from 'bcrypt';
 
 const app = express();
 const PORT = process.env.PORT || 3000; // Render necesita PORT dinámico
@@ -236,7 +237,163 @@ app.put('/api/cajas/:id/asignar', async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`✅ API escuchando en https://backend-7i6k.onrender.com (puerto ${PORT})`);
+// ===== Usuarios (Registro y Login) =====
+app.post('/api/register', async (req, res) => {
+  const { username, email, password } = req.body;
+
+  if (!username || !email || !password) {
+    return res.status(400).json({ error: 'Faltan datos' });
+  }
+
+  const conn = await pool.getConnection();
+  try {
+    const [[exists]] = await conn.query(
+      'SELECT id FROM usuarios WHERE username = ? OR email = ?',
+      [username, email]
+    );
+    if (exists) {
+      return res.status(409).json({ error: 'Usuario o email ya registrado' });
+    }
+
+    const hash = await bcrypt.hash(password, 10);
+    const [result] = await conn.query(
+      'INSERT INTO usuarios (username, email, password_hash) VALUES (?, ?, ?)',
+      [username, email, hash]
+    );
+
+    res.json({ ok: true, id: result.insertId, username, email });
+  } catch (err) {
+    console.error('register:', err);
+    res.status(500).json({ error: 'Error en registro' });
+  } finally {
+    conn.release();
+  }
 });
 
+app.post('/api/login', async (req, res) => {
+  const { usernameOrEmail, password } = req.body;
+  if (!usernameOrEmail || !password) {
+    return res.status(400).json({ error: 'Faltan datos' });
+  }
+
+  const conn = await pool.getConnection();
+  try {
+    const [rows] = await conn.query(
+      'SELECT * FROM usuarios WHERE username = ? OR email = ? LIMIT 1',
+      [usernameOrEmail, usernameOrEmail]
+    );
+    if (!rows.length) return res.status(401).json({ error: 'Usuario no encontrado' });
+
+    const user = rows[0];
+    const valid = await bcrypt.compare(password, user.password_hash);
+    if (!valid) return res.status(401).json({ error: 'Contraseña incorrecta' });
+
+    res.json({
+      ok: true,
+      id: user.id,
+      username: user.username,
+      email: user.email
+    });
+  } catch (err) {
+    console.error('login:', err);
+    res.status(500).json({ error: 'Error en login' });
+  } finally {
+    conn.release();
+  }
+});
+
+// ===== Estadísticas para Dashboard =====
+app.get('/api/stats/summary', async (_req, res) => {
+  const conn = await pool.getConnection();
+  try {
+    const [[totales]] = await conn.query(`SELECT COUNT(*) as total FROM tickets`);
+    const [[atendidos]] = await conn.query(`SELECT COUNT(*) as total FROM tickets WHERE estado='atendido'`);
+    const [[espera]] = await conn.query(`SELECT COUNT(*) as total FROM tickets WHERE estado='espera'`);
+    const [[salidos]] = await conn.query(`SELECT COUNT(*) as total FROM tickets WHERE estado='salido'`);
+
+    res.json({
+      total: totales.total,
+      atendidos: atendidos.total,
+      enCola: espera.total,
+      salidos: salidos.total
+    });
+  } catch (err) {
+    console.error('stats summary:', err);
+    res.status(500).json({ error: 'Error al obtener resumen' });
+  } finally {
+    conn.release();
+  }
+});
+
+app.get('/api/stats/daily', async (_req, res) => {
+  const conn = await pool.getConnection();
+  try {
+    const [rows] = await conn.query(`
+      SELECT DATE(created_at) as fecha, COUNT(*) as total
+      FROM tickets
+      GROUP BY DATE(created_at)
+      ORDER BY fecha DESC
+      LIMIT 7
+    `);
+    res.json(rows.reverse());
+  } catch (err) {
+    console.error('stats daily:', err);
+    res.status(500).json({ error: 'Error al obtener stats diarios' });
+  } finally {
+    conn.release();
+  }
+});
+
+app.get('/api/stats/monthly', async (_req, res) => {
+  const conn = await pool.getConnection();
+  try {
+    const [rows] = await conn.query(`
+      SELECT DATE_FORMAT(created_at, '%Y-%m') as mes, COUNT(*) as total
+      FROM tickets
+      GROUP BY mes
+      ORDER BY mes DESC
+      LIMIT 6
+    `);
+    res.json(rows.reverse());
+  } catch (err) {
+    console.error('stats monthly:', err);
+    res.status(500).json({ error: 'Error al obtener stats mensuales' });
+  } finally {
+    conn.release();
+  }
+});
+
+app.get('/api/stats/servicios', async (_req, res) => {
+  const conn = await pool.getConnection();
+  try {
+    const [rows] = await conn.query(`
+      SELECT tipo as servicio, COUNT(*) as total
+      FROM tickets
+      GROUP BY tipo
+      ORDER BY servicio
+    `);
+    res.json(rows);
+  } catch (err) {
+    console.error('stats servicios:', err);
+    res.status(500).json({ error: 'Error al obtener stats por servicio' });
+  } finally {
+    conn.release();
+  }
+});
+
+app.get('/api/usuarios', async (_req, res) => {
+  const conn = await pool.getConnection();
+  try {
+    const [rows] = await conn.query('SELECT id, username, email FROM usuarios ORDER BY id DESC');
+    res.json(rows);
+  } catch (err) {
+    console.error('usuarios:', err);
+    res.status(500).json({ error: 'Error al obtener usuarios' });
+  } finally {
+    conn.release();
+  }
+});
+
+app.listen(PORT, () => {
+  console.log(`✅ API escuchando en puerto ${PORT}`);
+});
