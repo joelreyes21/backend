@@ -395,29 +395,23 @@ app.get('/api/usuarios', async (_req, res) => {
 });
 
 // ===== Salir de la fila =====
+// ===== Salir de la fila =====
 app.post('/api/salir', async (req, res) => {
   const { codigo } = req.body;
-  if (!codigo) return res.status(400).json({ error: "Falta código" });
+  if (!codigo) return res.status(400).json({ error: 'Falta el código del ticket' });
 
   const conn = await pool.getConnection();
   try {
-    const [result] = await conn.query(
-      'UPDATE tickets SET estado="salido" WHERE codigo=?',
-      [codigo]
-    );
-
-    if (result.affectedRows === 0) {
-      return res.status(404).json({ error: "Ticket no encontrado" });
-    }
-
-    res.json({ ok: true, codigo });
+    await conn.query('UPDATE tickets SET estado="salido" WHERE codigo=?', [codigo]);
+    res.json({ ok: true });
   } catch (err) {
-    console.error("salir:", err);
-    res.status(500).json({ error: "Error al salir de la fila" });
+    console.error('salir:', err);
+    res.status(500).json({ error: 'Error al salir de la fila' });
   } finally {
     conn.release();
   }
 });
+
 
 app.listen(PORT, () => {
   console.log(`✅ API escuchando en puerto ${PORT}`);
